@@ -1,61 +1,76 @@
-# Indian Digital Life Friction Dataset — Full Project Guide
+# Indian Digital Life Friction Dataset
 
-A complete data analytics project that measures **where Indians face friction while using digital services** — UPI payments, e-commerce apps, and government digital platforms. This guide walks through every step with code, and explains *why* each step exists so you can defend it in an interview.
+A data analytics project that measures **where Indians face friction while using digital services** — UPI payments, e-commerce apps, and government digital platforms — by mining real Google Play Store reviews.
 
----
-
-## 0. The idea, in one line
-
-> "Millions of Indians write 1-star reviews and Reddit rants about payment failures, KYC delays, and app crashes every day — that's free, real, unstructured data about a real problem. This project turns that into a structured dataset and finds patterns in it."
-
-**Why this is a good portfolio project (say this in interviews):**
-- It's *your own* dataset — not a Kaggle CSV everyone has used
-- It touches the full pipeline: collection → cleaning → labeling → NLP → SQL → visualization
-- It has a real-world "so what" — insights a fintech/product team could actually use
+> Millions of Indians write 1-star reviews about payment failures, KYC delays, and app crashes every day — that's free, real, unstructured data about a real problem. This project turns that into a structured dataset and finds patterns in it.
 
 ---
 
-## 1. Project setup
+## Key findings
 
-```bash
-mkdir digital-friction-project
-cd digital-friction-project
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+*(from ~4,400 Play Store reviews across 7 apps: PhonePe, Google Pay, Paytm, Amazon, Flipkart, DigiLocker, mAadhaar)*
 
-pip install google-play-scraper praw pandas numpy nltk vaderSentiment matplotlib seaborn plotly sqlite3 streamlit
-```
+- **Amazon had the worst negative sentiment at 51.7%** — more than double every other platform (next worst: Flipkart at 31.6%)
+- **Payment apps performed best** — Paytm (16.7%) and PhonePe (18.0%) had the lowest negative sentiment of all 7 apps
+- **The *type* of friction differs by category.** E-commerce apps (Amazon, Flipkart) are dominated by `customer_support` and `delivery_issue` complaints — service failures. Government apps (DigiLocker, mAadhaar) are dominated by `performance_issue` and `app_crash` — engineering/stability failures. Same "friction" label, different root cause.
+- **Most common friction type overall:** `customer_support` (297), `performance_issue` (155), `app_crash` (99), `delivery_issue` (68), `fraud_or_scam` (65)
 
-Folder structure (keep it clean — recruiters open GitHub repos and judge by structure):
+**Why this is a strong portfolio project:**
+- It's an original dataset — not a Kaggle CSV everyone has already used
+- Covers the full pipeline: collection → cleaning → labeling → sentiment analysis → SQL → visualization
+- Has a real "so what" — insights a product/fintech team could actually act on
+
+---
+
+## Project structure
 
 ```
 digital-friction-project/
 ├── data/
-│   ├── raw/              # untouched scraped data
-│   └── processed/        # cleaned, labeled data
+│   ├── raw/                        # untouched scraped data
+│   │   └── playstore_reviews.csv
+│   ├── processed/                  # cleaned, labeled, final outputs
+│   │   ├── combined_clean.csv
+│   │   ├── labeled_data.csv
+│   │   ├── final_dataset.csv
+│   │   ├── friction.db
+│   │   ├── friction_distribution.png
+│   │   ├── platform_sentiment.png
+│   │   └── monthly_trend.png
 ├── scripts/
-│   ├── scrape_playstore.py
-│   ├── scrape_reddit.py
-│   ├── clean_data.py
-│   ├── label_friction.py
-│   ├── sentiment_analysis.py
-│   └── visualize.py
-├── notebooks/
-│   └── eda.ipynb
+│   ├── scrape_playstore.py         # step 1: collect data
+│   ├── clean_data.py               # step 2: clean text
+│   ├── label_friction.py           # step 3: tag friction type
+│   ├── sentiment_analysis.py       # step 4: VADER sentiment
+│   ├── load_to_sql.py              # step 5: load into SQLite
+│   └── visualize.py                # step 6: charts
 ├── dashboard/
-│   └── app.py
-├── README.md
-└── requirements.txt
+│   └── app.py                      # optional Streamlit dashboard
+├── requirements.txt
+├── .gitignore
+└── README.md
 ```
 
-**Interviewer might ask:** *"Why not just do everything in one notebook?"*
-**Answer:** Notebooks are great for exploration, but scripts are modular and reusable — you can re-run `scrape_playstore.py` weekly without re-running your whole analysis. Shows you think about production-style organization, not just one-off analysis.
+**Interviewer might ask:** *"Why scripts instead of one notebook?"*
+**Answer:** Notebooks are great for exploration, but scripts are modular and reusable — you can re-run `scrape_playstore.py` on a schedule without re-running the whole analysis. It also mirrors how production pipelines are actually organized.
 
 ---
 
-## 2. Step 1 — Collect data from Google Play Store reviews
+## Setup
 
-This is your primary data source. `google-play-scraper` needs no API key.
+```bash
+git clone <your-repo-url>
+cd digital-friction-project
+python -m venv venv
+venv\Scripts\activate        # Mac/Linux: source venv/bin/activate
+pip install -r requirements.txt
+```
+
+---
+
+## Step 1 — Collect data from Google Play Store reviews
+
+No API key needed — `google-play-scraper` is free and open.
 
 ```python
 # scripts/scrape_playstore.py
@@ -63,7 +78,6 @@ from google_play_scraper import reviews, Sort
 import pandas as pd
 import time
 
-# App package names (found in Play Store URL after id=)
 APPS = {
     "PhonePe": "com.phonepe.app",
     "Google Pay": "com.google.android.apps.nbu.paisa.user",
@@ -82,23 +96,15 @@ CATEGORY_MAP = {
 
 def scrape_app(app_name, package_name, count=1500):
     all_reviews = []
-    result, continuation_token = reviews(
-        package_name,
-        lang='en',
-        country='in',
-        sort=Sort.NEWEST,
-        count=count,
-        filter_score_with=None   # we want all ratings, not just low ones
+    result, _ = reviews(
+        package_name, lang='en', country='in',
+        sort=Sort.NEWEST, count=count, filter_score_with=None
     )
     for r in result:
         all_reviews.append({
-            "platform": app_name,
-            "category": CATEGORY_MAP[app_name],
-            "text": r['content'],
-            "rating": r['score'],
-            "date": r['at'],
-            "thumbs_up": r['thumbsUpCount'],
-            "source": "play_store"
+            "platform": app_name, "category": CATEGORY_MAP[app_name],
+            "text": r['content'], "rating": r['score'], "date": r['at'],
+            "thumbs_up": r['thumbsUpCount'], "source": "play_store"
         })
     return all_reviews
 
@@ -106,8 +112,11 @@ if __name__ == "__main__":
     everything = []
     for name, pkg in APPS.items():
         print(f"Scraping {name}...")
-        everything.extend(scrape_app(name, pkg))
-        time.sleep(2)   # be polite, avoid rate limiting
+        try:
+            everything.extend(scrape_app(name, pkg))
+        except Exception as e:
+            print(f"Failed on {name}: {e}")
+        time.sleep(2)
 
     df = pd.DataFrame(everything)
     df.to_csv("data/raw/playstore_reviews.csv", index=False)
@@ -115,64 +124,14 @@ if __name__ == "__main__":
 ```
 
 **Why pull ALL ratings, not just 1-3 star?**
-Interviewer trap question. Answer: if you only scrape negative reviews, your sentiment analysis is meaningless (you've already filtered for negative sentiment before analyzing it — that's data leakage/bias). Pull everything, then *let the analysis show* what's negative.
+If you only scrape negative reviews, sentiment analysis becomes meaningless — you've already filtered for negative sentiment before analyzing it. Pull everything and let the analysis show what's negative.
 
-**Interviewer might ask:** *"What if the scraper breaks / Play Store changes structure?"*
-**Answer:** Wrap in try/except per app so one failure doesn't kill the whole run; log failed apps and retry separately. (Add this in your real script — shows resilience thinking.)
-
----
-
-## 3. Step 2 — Collect data from Reddit
-
-```python
-# scripts/scrape_reddit.py
-import praw
-import pandas as pd
-
-# Get these free from https://www.reddit.com/prefs/apps (create a "script" app)
-reddit = praw.Reddit(
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
-    user_agent="digital_friction_research"
-)
-
-SUBREDDITS = ["india", "developersIndia", "IndiaInvestments", "IndianStreetBets"]
-KEYWORDS = [
-    "UPI failed", "payment stuck", "KYC pending", "refund not received",
-    "app crashed", "OTP not received", "DigiLocker error", "Aadhaar update failed"
-]
-
-def scrape_reddit_complaints(limit_per_query=100):
-    all_posts = []
-    for sub in SUBREDDITS:
-        subreddit = reddit.subreddit(sub)
-        for keyword in KEYWORDS:
-            for post in subreddit.search(keyword, limit=limit_per_query):
-                all_posts.append({
-                    "platform": "reddit_general",
-                    "category": "unlabeled",     # will assign in cleaning step
-                    "text": post.title + " " + (post.selftext or ""),
-                    "rating": None,
-                    "date": pd.to_datetime(post.created_utc, unit='s'),
-                    "thumbs_up": post.score,
-                    "source": "reddit",
-                    "search_keyword": keyword
-                })
-    return pd.DataFrame(all_posts)
-
-if __name__ == "__main__":
-    df = scrape_reddit_complaints()
-    df.drop_duplicates(subset="text", inplace=True)
-    df.to_csv("data/raw/reddit_posts.csv", index=False)
-    print(f"Saved {len(df)} Reddit posts")
-```
-
-**Interviewer might ask:** *"Why Reddit and not Twitter/X?"*
-**Answer:** Twitter's API is paid now (as of the API changes), Reddit's is free and has an official Python wrapper (PRAW). Reddit also has more longform, contextual complaints — Twitter is short and noisy.
+**Why not Reddit/Twitter too?**
+Both were tried during this project. Twitter's API is now paid. Consumer-complaint websites like consumercomplaints.in render their content with JavaScript, so a simple `requests` call returns an empty shell — nothing for BeautifulSoup to parse (you'd need Selenium/Playwright to get around that, which is a fair v2 addition but overkill for v1). Play Store alone gave a large, clean, real dataset without any of that overhead.
 
 ---
 
-## 4. Step 3 — Clean and combine the data
+## Step 2 — Clean the data
 
 ```python
 # scripts/clean_data.py
@@ -189,18 +148,10 @@ def clean_text(text):
     return text
 
 def load_and_combine():
-    play = pd.read_csv("data/raw/playstore_reviews.csv")
-    reddit = pd.read_csv("data/raw/reddit_posts.csv")
-
-    combined = pd.concat([play, reddit], ignore_index=True)
+    combined = pd.read_csv("data/raw/playstore_reviews.csv")
     combined['clean_text'] = combined['text'].apply(clean_text)
-
-    # Drop empty/too-short entries (not useful for analysis)
     combined = combined[combined['clean_text'].str.len() > 10]
-
-    # Drop exact duplicates (bots / repeated spam reviews)
     combined.drop_duplicates(subset='clean_text', inplace=True)
-
     combined.to_csv("data/processed/combined_clean.csv", index=False)
     print(f"Final dataset: {len(combined)} rows")
     return combined
@@ -209,39 +160,94 @@ if __name__ == "__main__":
     load_and_combine()
 ```
 
-**Interviewer might ask:** *"Why regex and not just an NLP library for cleaning?"*
-**Answer:** Regex is faster and fully explainable for basic cleaning (URLs, special chars). NLP libraries (spaCy/NLTK) come in later for the smarter stuff — tokenization, stopwords, lemmatization — which happens right before sentiment analysis, not during raw cleaning.
-
 ---
 
-## 5. Step 4 — Label the "friction type" (this is the core NLP/analytics step)
+## Step 3 — Label the friction type (the core NLP step)
 
-This is what makes it *your* dataset, not just scraped raw text.
+A rule-based keyword classifier — built and refined by inspecting real "uncategorized" text and iterating on the keyword list until the categories captured the actual complaint patterns in the data.
 
 ```python
 # scripts/label_friction.py
 import pandas as pd
 
-# Rule-based keyword classifier — simple, explainable, good enough for v1
 FRICTION_KEYWORDS = {
-    "payment_failure": ["payment failed", "transaction failed", "money deducted", "amount debited"],
-    "otp_issue": ["otp not received", "otp delay", "otp expired", "wrong otp"],
-    "refund_delay": ["refund not received", "refund pending", "waiting for refund", "money not refunded"],
-    "app_crash": ["app crash", "app not working", "app hangs", "force close"],
-    "kyc_issue": ["kyc pending", "kyc failed", "kyc rejected", "verification failed"],
-    "customer_support": ["customer care", "no response", "support useless", "complaint ignored"],
-    "login_issue": ["cannot login", "login failed", "account locked", "cannot access account"],
+    "payment_failure": [
+        "payment failed", "transaction failed", "money deducted", "amount debited",
+        "payment not done", "payment issue", "payment problem", "money gone",
+        "amount deducted", "transaction unsuccessful", "mandate not approved",
+        "mandate issue", "mandate rejected"
+    ],
+    "otp_issue": [
+        "otp not received", "otp delay", "otp expired", "wrong otp",
+        "otp issue", "otp problem", "no otp"
+    ],
+    "refund_delay": [
+        "refund not received", "refund pending", "waiting for refund",
+        "money not refunded", "refund issue", "refund problem", "no refund"
+    ],
+    "app_crash": [
+        "app crash", "app not working", "app hangs", "force close",
+        "app crashing", "stopped working", "not working properly", "app freeze",
+        "stuck", "loading screen", "not opening", "won't open", "can not open",
+        "unable to open"
+    ],
+    "kyc_issue": [
+        "kyc pending", "kyc failed", "kyc rejected", "verification failed",
+        "kyc issue", "verification pending", "kyc problem"
+    ],
+    "customer_support": [
+        "customer care", "customer support", "no response", "support useless",
+        "complaint ignored", "toll free", "no cooperation", "not responding",
+        "poor service", "no proper response", "customer service", "rude",
+        "no proper solution"
+    ],
+    "login_issue": [
+        "cannot login", "login failed", "account locked", "cannot access account",
+        "unable to login", "sign in problem", "login issue"
+    ],
+    "delivery_issue": [
+        "late delivery", "delivery delay", "not delivered", "delivery problem",
+        "delayed delivery", "order late", "delivery issue", "delivery agent",
+        "delivery boy", "not delivered on time", "shipment delay"
+    ],
+    "compatibility_issue": [
+        "not compatible", "unable to download", "cannot install", "device not supported",
+        "not installing", "compatibility issue"
+    ],
+    "balance_discrepancy": [
+        "wrong balance", "improper balance", "balance mismatch", "incorrect balance",
+        "showing wrong", "balance issue", "glitch"
+    ],
+    "document_issue": [
+        "document fetching", "document not found", "unable to fetch document",
+        "document error", "document problem", "fetching problem"
+    ],
+    "performance_issue": [
+        "slow app", "very slow", "app is slow", "lagging", "hangs a lot",
+        "bakwas", "bakwash", "worst app", "useless app", "bekar"
+    ],
+    "damaged_or_wrong_product": [
+        "damaged product", "damaged package", "different item", "wrong item",
+        "wrong product", "broken product", "defective product"
+    ],
+    "fraud_or_scam": [
+        "scam", "fraud", "fraudulent", "fraudulently"
+    ],
+    "order_cancelled": [
+        "order cancelled", "automatically cancelled", "cancelled my order",
+        "order got cancelled"
+    ],
+    "security_issue": [
+        "security threat", "security issue", "obfuscation", "malware", "unsafe app"
+    ],
 }
 
 def assign_friction_type(text):
     text = str(text).lower()
-    matches = []
     for friction_type, keywords in FRICTION_KEYWORDS.items():
         if any(kw in text for kw in keywords):
-            matches.append(friction_type)
-    if not matches:
-        return "other"
-    return matches[0]   # take first match; a text could have multiple, keep it simple for v1
+            return friction_type
+    return "other"
 
 def label_dataset():
     df = pd.read_csv("data/processed/combined_clean.csv")
@@ -255,14 +261,14 @@ if __name__ == "__main__":
 ```
 
 **Interviewer might ask:** *"Why rule-based keywords and not a trained ML classifier?"*
-**Answer (this is an important answer — memorize the logic):**
-"For v1, I wanted something explainable and fast to build with zero labeled training data. A rule-based approach is 100% interpretable — I know exactly why something got labeled `payment_failure`. Once I have this labeled dataset, I could train a supervised classifier (like Naive Bayes or a fine-tuned small model) using these rule-based labels as a starting point — that's actually a `real technique called weak supervision`. That would be my v2 improvement."
+**Answer:** "For v1, I wanted something explainable and fast to build with zero labeled training data. A rule-based approach is 100% interpretable — I know exactly why something got labeled `payment_failure`. Once I have this labeled dataset, I could train a supervised classifier using these rule-based labels as a starting point — a real technique called weak supervision. That would be my v2 improvement."
 
-This answer shows you know the limitation AND the next step — exactly what interviewers want to hear.
+**Interviewer might ask:** *"Why does 'other' still make up most of the dataset?"*
+**Answer:** "Two reasons. First, a large share of the reviews are genuinely positive — 'best app', 'awesome' — and correctly have no friction type. Second, the remaining negative-but-uncategorized text is a long tail of one-off complaints that don't repeat often enough to justify a dedicated category. I checked this directly: I filtered 'other' rows down to just the negative-sentiment ones and read a sample before deciding which new categories were worth adding — that's how `damaged_or_wrong_product`, `fraud_or_scam`, `order_cancelled`, and `security_issue` were identified."
 
 ---
 
-## 6. Step 5 — Sentiment Analysis
+## Step 4 — Sentiment analysis
 
 ```python
 # scripts/sentiment_analysis.py
@@ -278,8 +284,7 @@ def get_sentiment(text):
         return "positive"
     elif compound <= -0.05:
         return "negative"
-    else:
-        return "neutral"
+    return "neutral"
 
 def add_sentiment():
     df = pd.read_csv("data/processed/labeled_data.csv")
@@ -293,11 +298,11 @@ if __name__ == "__main__":
 ```
 
 **Interviewer might ask:** *"Why VADER and not a transformer model like BERT?"*
-**Answer:** VADER is rule-based, lexicon-driven, and specifically tuned for short, informal text like reviews and social posts — which is exactly what this dataset is. It's fast, needs no GPU/training, and is fully explainable. A BERT-based model would be more accurate but is overkill for a v1 project and much harder to explain in an interview if asked "how does it work internally." Good engineering is picking the right-sized tool, not the fanciest one.
+**Answer:** VADER is lexicon-based and tuned specifically for short, informal text like reviews — exactly what this dataset is. It needs no GPU or training and is fully explainable. BERT would be more accurate but is overkill for v1 and much harder to explain if asked how it works internally. Picking the right-sized tool is the point.
 
 ---
 
-## 7. Step 6 — Load into SQL and query it (shows you're not just a pandas person)
+## Step 5 — Load into SQL and query it
 
 ```python
 # scripts/load_to_sql.py
@@ -311,38 +316,38 @@ conn.close()
 print("Loaded into SQLite: data/friction.db")
 ```
 
-Now run real SQL analysis — this is what you screenshot for your portfolio/README:
+Queries used to produce the key findings above:
 
 ```sql
--- Which friction type is most common per platform?
+-- Top friction type per platform
 SELECT platform, friction_type, COUNT(*) as complaint_count
 FROM complaints
+WHERE friction_type != 'other'
 GROUP BY platform, friction_type
 ORDER BY platform, complaint_count DESC;
 
--- Which platform has the worst average sentiment?
+-- Platform with worst negative sentiment %
 SELECT platform,
-       SUM(CASE WHEN sentiment = 'negative' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS negative_pct
+       ROUND(SUM(CASE WHEN sentiment = 'negative' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS negative_pct,
+       COUNT(*) AS total_reviews
 FROM complaints
 GROUP BY platform
 ORDER BY negative_pct DESC;
 
--- Monthly trend of payment_failure complaints (window function — shows SQL depth)
-SELECT strftime('%Y-%m', date) AS month,
-       COUNT(*) AS failures,
-       SUM(COUNT(*)) OVER (ORDER BY strftime('%Y-%m', date)) AS running_total
+-- Most common friction type overall
+SELECT friction_type, COUNT(*) as cnt
 FROM complaints
-WHERE friction_type = 'payment_failure'
-GROUP BY month
-ORDER BY month;
+WHERE friction_type != 'other'
+GROUP BY friction_type
+ORDER BY cnt DESC;
 ```
 
 **Interviewer might ask:** *"Why SQLite and not Postgres/MySQL?"*
-**Answer:** For a project of this size, SQLite needs zero setup (it's a file, not a server) — perfect for a portfolio project people can clone and run instantly. In a production environment, I'd use Postgres for concurrent access and scalability, but the SQL logic itself (joins, window functions, aggregations) transfers directly.
+**Answer:** SQLite needs zero setup — it's a file, not a server — perfect for a portfolio project people can clone and run instantly. In production I'd use Postgres for concurrent access, but the SQL logic itself (joins, aggregations, grouping) transfers directly.
 
 ---
 
-## 8. Step 7 — Visualization
+## Step 6 — Visualization
 
 ```python
 # scripts/visualize.py
@@ -353,22 +358,26 @@ import seaborn as sns
 df = pd.read_csv("data/processed/final_dataset.csv")
 sns.set_style("whitegrid")
 
-# 1. Friction type distribution
+# 1. Friction type distribution — 'other' excluded deliberately, see note below
 plt.figure(figsize=(10,6))
-df['friction_type'].value_counts().plot(kind='bar', color='steelblue')
-plt.title("Digital Friction Types — Complaint Volume")
+friction_counts = df[df['friction_type'] != 'other']['friction_type'].value_counts()
+friction_counts.plot(kind='bar', color='steelblue')
+plt.title("Digital Friction Types — Complaint Volume (excluding uncategorized)")
 plt.ylabel("Number of Complaints")
-plt.xticks(rotation=45)
+plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
 plt.savefig("data/processed/friction_distribution.png")
+plt.close()
 
-# 2. Platform comparison — % negative sentiment
+# 2. Sentiment breakdown by platform
+plt.figure(figsize=(10,6))
 platform_sentiment = pd.crosstab(df['platform'], df['sentiment'], normalize='index') * 100
-platform_sentiment.plot(kind='bar', stacked=True, figsize=(10,6))
+platform_sentiment.plot(kind='bar', stacked=True, ax=plt.gca())
 plt.title("Sentiment Breakdown by Platform")
 plt.ylabel("% of Reviews")
 plt.tight_layout()
 plt.savefig("data/processed/platform_sentiment.png")
+plt.close()
 
 # 3. Monthly trend
 df['date'] = pd.to_datetime(df['date'])
@@ -379,13 +388,17 @@ monthly.plot(kind='line', marker='o')
 plt.title("Complaint Volume Over Time")
 plt.tight_layout()
 plt.savefig("data/processed/monthly_trend.png")
+plt.close()
 
 print("Charts saved to data/processed/")
 ```
 
+**Why exclude "other" from the friction-type chart?**
+"Other" is ~80% of the dataset by volume (mostly positive reviews with no friction to categorize). Including it in the same bar chart as the real categories would visually flatten everything else into invisible slivers. Excluding it makes the actual pattern — what's breaking, and how often — visible.
+
 ---
 
-## 9. Step 8 (bonus) — Simple Streamlit dashboard
+## Step 7 (bonus) — Streamlit dashboard
 
 ```python
 # dashboard/app.py
@@ -402,7 +415,8 @@ filtered = df[df['platform'].isin(platform_filter)]
 
 col1, col2 = st.columns(2)
 with col1:
-    fig1 = px.bar(filtered['friction_type'].value_counts(), title="Friction Types")
+    fig1 = px.bar(filtered[filtered['friction_type'] != 'other']['friction_type'].value_counts(),
+                   title="Friction Types")
     st.plotly_chart(fig1)
 with col2:
     fig2 = px.pie(filtered, names='sentiment', title="Sentiment Split")
@@ -415,31 +429,30 @@ Run with: `streamlit run dashboard/app.py`
 
 ---
 
-## 10. Interview Q&A cheat-sheet (read this before interviews)
+## Interview Q&A cheat-sheet
 
 **Q: Walk me through your project end to end.**
-A: "I scraped Play Store reviews and Reddit posts about Indian digital services — payments, e-commerce, govt apps. I cleaned the text, built a rule-based classifier to tag each complaint with a friction type like payment failure or KYC issue, ran sentiment analysis with VADER, loaded everything into SQLite for querying, and visualized the patterns — which platform has the worst friction, what type of issue is most common, and how it trends over time."
+A: "I scraped ~4,400 Google Play Store reviews across 7 Indian apps spanning payments, e-commerce, and government services. I cleaned the text, built a rule-based classifier to tag each review with a friction type — payment failure, delivery issue, app crash, and so on — ran sentiment analysis with VADER, loaded everything into SQLite for querying, and visualized the patterns: which platform has the worst friction, what type of issue is most common, and how it breaks down by category."
 
 **Q: What was the hardest part?**
-A: "Labeling friction type without any pre-existing labeled data. I solved it with a rule-based keyword classifier for v1, which is explainable, and noted that a supervised model trained on those labels would be the natural v2 improvement."
+A: "Labeling friction type with zero pre-existing labeled data. I built a rule-based keyword classifier for v1, tested it against the real data, found that ~95% of rows were falling into 'other', filtered that down to just the negative-sentiment ones, read a sample, and used that to expand the keyword list in two more rounds — going from 4 real categories to 16. I stopped once returns diminished, since a portfolio v1 doesn't need a perfect classifier, it needs a defensible one."
 
 **Q: What would you improve with more time?**
-A: "Three things: (1) train an actual ML classifier instead of rule-based friction labeling, (2) add Twitter/X data if I had API budget, (3) build a proper Postgres backend instead of SQLite for a live-updating dashboard."
+A: "Three things: (1) train an actual supervised classifier using the rule-based labels as weak supervision instead of pure keyword matching, (2) add a JS-rendering scraper (Selenium/Playwright) to pull in consumer-complaint sites I couldn't reach with plain `requests`, (3) move from SQLite to Postgres for a live-updating dashboard."
 
-**Q: What insight surprised you?** *(Answer this with YOUR actual numbers once you run it — interviewers can tell when this is memorized vs real)*
+**Q: What insight surprised you?**
+A: "Amazon had by far the worst negative sentiment — 51.7%, more than double every other platform. What was more interesting was *why*: Amazon and Flipkart's top friction categories were `customer_support` and `delivery_issue` — service problems. DigiLocker and mAadhaar's top categories were `performance_issue` and `app_crash` — engineering problems. Same friction label, completely different root cause depending on the category. Payment apps like PhonePe and Paytm had the lowest negative sentiment of the whole dataset, suggesting UPI infrastructure is more mature than either e-commerce ops or government app engineering."
 
 **Q: How is this different from a Kaggle project?**
-A: "Kaggle datasets are already clean and labeled — someone did the hard part for you. Here I did the full pipeline myself: collection, cleaning, and labeling, which is what actual data analyst work looks like."
+A: "Kaggle datasets are already clean and labeled — someone else did the hard part. Here I did the full pipeline myself: collection, cleaning, and labeling, which is what actual data analyst work looks like."
 
 ---
 
-## 11. Final checklist before publishing to GitHub
+## Final checklist before publishing to GitHub
 
-- [ ] `requirements.txt` with all packages and versions
-- [ ] `.gitignore` excludes `venv/`, API keys, large raw CSVs if too big
-- [ ] README has your actual charts/screenshots embedded (not just this guide)
-- [ ] Top of README has a 3-line summary + key finding (recruiters skim first 10 seconds)
-- [ ] Reddit API keys stored in `.env`, never committed
-- [ ] LinkedIn post written summarizing your top 2-3 findings, linking to repo
-
-Good luck Dz — is level ka execution kaafi students se aage rakhega tumhe. Ab bas isko run karo, apna real data collect karo, aur apne actual numbers ke saath Q&A section fill karo.
+- [x] `requirements.txt` lists exact packages used
+- [x] `.gitignore` excludes `venv/`, raw/processed CSVs, and the SQLite `.db` file
+- [x] README has real findings and real numbers, not placeholders
+- [x] Top of README has a scannable summary (recruiters skim the first 10 seconds)
+- [ ] Add 1-2 actual chart screenshots into this README (embed the PNGs from `data/processed/`)
+- [ ] Write a LinkedIn post summarizing the top 2-3 findings, linking to the repo
