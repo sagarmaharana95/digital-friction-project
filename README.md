@@ -427,26 +427,6 @@ st.dataframe(filtered[['platform', 'friction_type', 'sentiment', 'text']].head(5
 
 Run with: `streamlit run dashboard/app.py`
 
----
-
-## Interview Q&A cheat-sheet
-
-**Q: Walk me through your project end to end.**
-A: "I scraped ~4,400 Google Play Store reviews across 7 Indian apps spanning payments, e-commerce, and government services. I cleaned the text, built a rule-based classifier to tag each review with a friction type — payment failure, delivery issue, app crash, and so on — ran sentiment analysis with VADER, loaded everything into SQLite for querying, and visualized the patterns: which platform has the worst friction, what type of issue is most common, and how it breaks down by category."
-
-**Q: What was the hardest part?**
-A: "Labeling friction type with zero pre-existing labeled data. I built a rule-based keyword classifier for v1, tested it against the real data, found that ~95% of rows were falling into 'other', filtered that down to just the negative-sentiment ones, read a sample, and used that to expand the keyword list in two more rounds — going from 4 real categories to 16. I stopped once returns diminished, since a portfolio v1 doesn't need a perfect classifier, it needs a defensible one."
-
-**Q: What would you improve with more time?**
-A: "Three things: (1) train an actual supervised classifier using the rule-based labels as weak supervision instead of pure keyword matching, (2) add a JS-rendering scraper (Selenium/Playwright) to pull in consumer-complaint sites I couldn't reach with plain `requests`, (3) move from SQLite to Postgres for a live-updating dashboard."
-
-**Q: What insight surprised you?**
-A: "Amazon had by far the worst negative sentiment — 51.7%, more than double every other platform. What was more interesting was *why*: Amazon and Flipkart's top friction categories were `customer_support` and `delivery_issue` — service problems. DigiLocker and mAadhaar's top categories were `performance_issue` and `app_crash` — engineering problems. Same friction label, completely different root cause depending on the category. Payment apps like PhonePe and Paytm had the lowest negative sentiment of the whole dataset, suggesting UPI infrastructure is more mature than either e-commerce ops or government app engineering."
-
-**Q: How is this different from a Kaggle project?**
-A: "Kaggle datasets are already clean and labeled — someone else did the hard part. Here I did the full pipeline myself: collection, cleaning, and labeling, which is what actual data analyst work looks like."
-
----
 
 ## Final checklist before publishing to GitHub
 
